@@ -35,6 +35,8 @@ def load_config(env_file: str | Path | None = Path(".env")) -> AppConfig:
     _load_env_file(env_file)
     
     token = _prepare_client_token(raw_token=os.getenv("DISCORD_BOT_TOKEN"))
+    
+    print("Configuration loaded successfully.")
 
     return AppConfig(discord=DiscordSettings(token=token))
 

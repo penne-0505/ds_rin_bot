@@ -11,11 +11,12 @@ async def run_bot() -> None:
         print(f"Error loading config: {e}")
         return
     
-    app = build_discord_app(config)
+    app = await build_discord_app(config)
     await app.run()
 
 def main() -> None:
     asyncio.run(run_bot())
 
 if __name__ == '__main__':
+    print("Starting Discord Bot...")
     main()

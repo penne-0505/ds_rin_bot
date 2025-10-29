@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 
 from bot import BotClient, register_commands
@@ -12,10 +13,11 @@ class DiscordApplication:
         async with self.client:
             await self.client.start(self.token)
 
-def build_discord_app(config: AppConfig) -> DiscordApplication:
+async def build_discord_app(config: AppConfig) -> DiscordApplication:
     
     client = BotClient()
-    register_commands(client)
+    await register_commands(client)
+    print("Discord bot client initialized with commands registered.")
     return DiscordApplication(client=client, token=config.discord.token)
 
 __all__ = [

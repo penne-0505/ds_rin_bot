@@ -13,6 +13,7 @@ async def register_commands(client: "BotClient") -> None:
     
     @tree.command()
     async def command_setup(interaction: discord.Interaction) -> None:
+        print("command executed: command_setup")
         await interaction.response.defer(ephemeral=True)
         """UI付きメッセージを送る"""
         view = SendModalView()
