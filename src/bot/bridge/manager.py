@@ -8,6 +8,10 @@ from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 import discord
 
 from .profiles import BridgeProfile, BridgeProfileStore
+from .messages import (
+    BridgeMessageAttachmentMetadata,
+    BridgeMessageStore,
+)
 from .routes import ChannelEndpoint, ChannelRoute
 
 LOGGER = logging.getLogger(__name__)
@@ -32,9 +36,17 @@ class MirrorPayload:
 class ChannelBridgeManager:
     """Bridge messages and reactions across configured channel pairs."""
 
-    def __init__(self, *, client: discord.Client, profile_store: BridgeProfileStore, routes: Sequence[ChannelRoute]) -> None:
+    def __init__(
+        self,
+        *,
+        client: discord.Client,
+        profile_store: BridgeProfileStore,
+        message_store: BridgeMessageStore,
+        routes: Sequence[ChannelRoute],
+    ) -> None:
         self._client = client
         self._profile_store = profile_store
+        self._message_store = message_store
         self._routes_by_source: Dict[Tuple[int, int], List[ChannelRoute]] = {}
         self._message_links: Dict[int, Set[int]] = {}
         self._message_locations: Dict[int, Tuple[Optional[int], int]] = {}
@@ -69,6 +81,18 @@ class ChannelBridgeManager:
 
         self._store_message_location(message)
 
+        try:
+            profile = self._profile_store.get_profile(seed=f"{message.author.id}-{date.today().isoformat()}")
+            dicebear_failed = False
+        except Exception as exc:  # pragma: no cover - 外部APIの不調に備える
+            dicebear_failed = True
+            LOGGER.warning("DiceBear プロフィール生成に失敗しました: message_id=%s error=%s", message.id, exc)
+            bot_user = self._client.user
+            fallback_avatar = str(bot_user.display_avatar.url) if bot_user else ""
+            profile = BridgeProfile(seed="fallback", display_name="仮想伝令", avatar_url=fallback_avatar)
+
+        new_destination_ids: List[int] = []
+
         for route in routes:
             destination = await self._resolve_channel(route.dst)
             if destination is None:
@@ -78,16 +102,6 @@ class ChannelBridgeManager:
                     route.dst.channel,
                 )
                 continue
-
-            dicebear_failed = False
-            try:
-                profile = self._profile_store.get_profile(seed=f"{message.author.id}-{date.today().isoformat()}")
-            except Exception as exc:  # pragma: no cover - 外部APIの不調に備える
-                dicebear_failed = True
-                LOGGER.warning("DiceBear プロフィール生成に失敗しました: message_id=%s error=%s", message.id, exc)
-                bot_user = self._client.user
-                fallback_avatar = str(bot_user.display_avatar.url) if bot_user else ""
-                profile = BridgeProfile(seed="fallback", display_name="仮想伝令", avatar_url=fallback_avatar)
 
             payload = await self._build_mirror_payload(
                 source_message=message,
@@ -120,6 +134,23 @@ class ChannelBridgeManager:
             self._store_message_location(mirrored)
             self._link_messages(message.id, mirrored.id)
             self._mirrored_message_ids.add(mirrored.id)
+            new_destination_ids.append(mirrored.id)
+
+        if new_destination_ids:
+            image_filename, attachment_notes = self._summarize_attachment_notes(message.attachments)
+            metadata = BridgeMessageAttachmentMetadata(
+                image_filename=image_filename,
+                notes=attachment_notes,
+            )
+            self._message_store.upsert(
+                source_id=message.id,
+                destination_ids=new_destination_ids,
+                profile_seed=profile.seed,
+                display_name=profile.display_name,
+                avatar_url=profile.avatar_url,
+                dicebear_failed=dicebear_failed,
+                attachments=metadata,
+            )
 
     async def handle_message_edit(self, before: discord.Message, after: discord.Message) -> None:
         if after.author.bot:
@@ -133,23 +164,32 @@ class ChannelBridgeManager:
         if not linked_ids:
             return
 
-        dicebear_failed = False
-        try:
-            profile = self._profile_store.get_profile(
-                seed=f"{after.author.id}-{date.today().isoformat()}"
+        record = self._message_store.get(after.id)
+        if record is not None:
+            dicebear_failed = record.dicebear_failed
+            profile = BridgeProfile(
+                seed=record.profile_seed,
+                display_name=record.display_name,
+                avatar_url=record.avatar_url,
             )
-        except Exception as exc:  # pragma: no cover - 外部APIの不調に備える
-            dicebear_failed = True
-            LOGGER.warning(
-                "DiceBear プロフィール生成に失敗しました: message_id=%s error=%s",
-                after.id,
-                exc,
-            )
-            bot_user = self._client.user
-            fallback_avatar = str(bot_user.display_avatar.url) if bot_user else ""
-            profile = BridgeProfile(seed="fallback", display_name="仮想伝令", avatar_url=fallback_avatar)
+        else:
+            dicebear_failed = False
+            try:
+                profile = self._profile_store.get_profile(
+                    seed=f"{after.author.id}-{date.today().isoformat()}"
+                )
+            except Exception as exc:  # pragma: no cover - 外部APIの不調に備える
+                dicebear_failed = True
+                LOGGER.warning(
+                    "DiceBear プロフィール生成に失敗しました: message_id=%s error=%s",
+                    after.id,
+                    exc,
+                )
+                bot_user = self._client.user
+                fallback_avatar = str(bot_user.display_avatar.url) if bot_user else ""
+                profile = BridgeProfile(seed="fallback", display_name="仮想伝令", avatar_url=fallback_avatar)
 
-        _, attachment_notes = self._summarize_attachment_notes(after.attachments)
+        source_image_filename, attachment_notes = self._summarize_attachment_notes(after.attachments)
 
         base_annotations: List[str] = []
         if dicebear_failed:
@@ -196,9 +236,9 @@ class ChannelBridgeManager:
             )
 
             if embed is not None:
-                image_filename = self._select_image_attachment_filename(target_message.attachments)
-                if image_filename:
-                    embed.set_image(url=f"attachment://{image_filename}")
+                target_image_filename = self._select_image_attachment_filename(target_message.attachments)
+                if target_image_filename:
+                    embed.set_image(url=f"attachment://{target_image_filename}")
 
             try:
                 await target_message.edit(
@@ -213,6 +253,15 @@ class ChannelBridgeManager:
                     linked_id,
                     exc,
                 )
+
+        if record is not None:
+            self._message_store.update_metadata(
+                source_id=after.id,
+                attachments=BridgeMessageAttachmentMetadata(
+                    image_filename=source_image_filename,
+                    notes=attachment_notes,
+                ),
+            )
 
     async def handle_reaction(self, reaction: discord.Reaction, user: discord.abc.User, *, add: bool) -> None:
         if user.bot:
@@ -259,6 +308,10 @@ class ChannelBridgeManager:
                     self._message_links.pop(linked_id, None)
         self._message_locations.pop(message_id, None)
         self._mirrored_message_ids.discard(message_id)
+
+        if self._message_store.delete(message_id):
+            return
+        self._message_store.remove_destination(message_id)
 
     def _link_messages(self, source_id: int, target_id: int) -> None:
         self._message_links.setdefault(source_id, set()).add(target_id)

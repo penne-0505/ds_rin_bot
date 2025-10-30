@@ -9,6 +9,7 @@ from tinydb import TinyDB
 from app.config import AppConfig
 from bot import BotClient, register_commands
 from bot.bridge import (
+    BridgeMessageStore,
     BridgeProfileStore,
     ChannelBridgeManager,
     load_channel_routes,
@@ -49,12 +50,15 @@ async def build_discord_app(config: AppConfig) -> DiscordApplication:
 
     bridge_profiles_db = TinyDB(data_dir / "bridge_profiles.json")
     profile_store = BridgeProfileStore(bridge_profiles_db)
+    bridge_messages_db = TinyDB(data_dir / "bridge_messages.json")
+    message_store = BridgeMessageStore(bridge_messages_db)
     routes = load_channel_routes(data_dir / "channel_routes.json")
 
     client = BotClient(temp_vc_manager=temp_vc_manager)
     client.bridge_manager = ChannelBridgeManager(
         client=client,
         profile_store=profile_store,
+        message_store=message_store,
         routes=routes,
     )
 
