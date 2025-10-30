@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import discord
 from tinydb import Query, TinyDB
@@ -64,15 +64,95 @@ class TempVCCategoryStore:
 
 
 @dataclass(slots=True)
+class TempVCChannelStore:
+    """Persist and retrieve temporary VC ownership mappings."""
+
+    db: TinyDB
+    table_name: str = "temp_vc_channels"
+    _table: Table = field(init=False, repr=False)
+    _query: Query = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        self._table = self.db.table(self.table_name)
+        self._query = Query()
+
+    def load_all(self) -> Dict[int, Dict[int, List[int]]]:
+        snapshot: Dict[int, Dict[int, List[int]]] = {}
+        for record in self._table.all():
+            try:
+                guild_id = int(record["guild_id"])
+                user_id = int(record["user_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+            channel_ids = self._sanitize_channel_ids(record.get("channel_ids"))
+            if not channel_ids:
+                continue
+
+            guild_mapping = snapshot.setdefault(guild_id, {})
+            guild_mapping[user_id] = channel_ids
+        return snapshot
+
+    def add_channel(self, guild_id: int, user_id: int, channel_id: int) -> None:
+        existing = self._get_channel_ids(guild_id, user_id)
+        existing.append(int(channel_id))
+        self.set_channels(guild_id, user_id, existing)
+
+    def remove_channel(self, guild_id: int, user_id: int, channel_id: int) -> None:
+        existing = self._get_channel_ids(guild_id, user_id)
+        filtered = [cid for cid in existing if cid != int(channel_id)]
+        self.set_channels(guild_id, user_id, filtered)
+
+    def set_channels(self, guild_id: int, user_id: int, channel_ids: List[int]) -> None:
+        condition = (self._query.guild_id == int(guild_id)) & (self._query.user_id == int(user_id))
+        sanitized = self._sanitize_channel_ids(channel_ids)
+        if sanitized:
+            self._table.upsert(
+                {
+                    "guild_id": int(guild_id),
+                    "user_id": int(user_id),
+                    "channel_ids": sanitized,
+                },
+                condition,
+            )
+        else:
+            self._table.remove(condition)
+
+    def clear_guild(self, guild_id: int) -> None:
+        self._table.remove(self._query.guild_id == int(guild_id))
+
+    def _get_channel_ids(self, guild_id: int, user_id: int) -> List[int]:
+        condition = (self._query.guild_id == int(guild_id)) & (self._query.user_id == int(user_id))
+        record = self._table.get(condition)
+        return self._sanitize_channel_ids(record.get("channel_ids") if record else None)
+
+    @staticmethod
+    def _sanitize_channel_ids(raw: Optional[List[object]]) -> List[int]:
+        sanitized: List[int] = []
+        if not raw:
+            return sanitized
+
+        for value in raw:
+            try:
+                channel_id = int(value)
+            except (TypeError, ValueError):
+                continue
+            if channel_id not in sanitized:
+                sanitized.append(channel_id)
+        return sanitized
+
+
+@dataclass(slots=True)
 class TempVoiceChannelManager:
     """Manage creation and cleanup of per-user temporary voice channels."""
 
     category_store: TempVCCategoryStore
-    _user_channels: Dict[int, Dict[int, int]] | None = None  # guild_id -> user_id -> channel_id
+    channel_store: TempVCChannelStore
+    _user_channels: Dict[int, Dict[int, List[int]]] | None = None  # guild_id -> user_id -> [channel_id]
 
     def __post_init__(self) -> None:
         if self._user_channels is None:
-            self._user_channels = {}
+            self._user_channels = self.channel_store.load_all()
 
     async def create_user_channel(
         self,
@@ -97,7 +177,11 @@ class TempVoiceChannelManager:
             raise TempVCCategoryNotFoundError(category_id)
 
         guild_mapping = self._user_channels.setdefault(guild.id, {})
-        existing_channel = self._resolve_existing_channel(guild, guild_mapping.get(user.id))
+        existing_channel = self._resolve_existing_channel(
+            guild,
+            user_id=user.id,
+            channel_ids=list(guild_mapping.get(user.id, [])),
+        )
         if existing_channel is not None:
             raise TempVCAlreadyExistsError(existing_channel)
 
@@ -112,7 +196,9 @@ class TempVoiceChannelManager:
             reason=f"Temporary voice channel requested by {user} ({user.id})",
         )
 
-        guild_mapping[user.id] = channel.id
+        user_channels = guild_mapping.setdefault(user.id, [])
+        user_channels.append(channel.id)
+        self.channel_store.add_channel(guild.id, user.id, channel.id)
         return channel
 
     async def handle_voice_state_update(
@@ -140,7 +226,7 @@ class TempVoiceChannelManager:
             print(f"Failed to delete temporary voice channel {channel.id}: {exc}")
             return
 
-        self._forget_channel(channel.guild.id, owner_user_id)
+        self._forget_channel(channel.guild.id, owner_user_id, channel.id)
 
     def set_category_for_guild(self, *, guild_id: int, category_id: int) -> None:
         """Persist the category used for temporary voice channels in the given guild."""
@@ -148,6 +234,7 @@ class TempVoiceChannelManager:
         self.category_store.set_category_id(guild_id, category_id)
         # Reset state so future creations use the fresh category and stale mappings don't linger.
         self._user_channels.pop(guild_id, None)
+        self.channel_store.clear_guild(guild_id)
 
     def get_category_for_guild(self, guild_id: int) -> Optional[int]:
         """Return the configured category id for the given guild, if any."""
@@ -157,45 +244,70 @@ class TempVoiceChannelManager:
     def _resolve_existing_channel(
         self,
         guild: discord.Guild,
-        channel_id: Optional[int],
+        *,
+        user_id: int,
+        channel_ids: List[int],
     ) -> Optional[discord.VoiceChannel]:
-        if channel_id is None:
+        if not channel_ids:
             return None
 
-        channel = guild.get_channel(channel_id)
-        if isinstance(channel, discord.VoiceChannel):
-            return channel
+        guild_mapping = self._user_channels.setdefault(guild.id, {})
+        valid_ids: List[int] = []
+        existing: Optional[discord.VoiceChannel] = None
 
-        # Channel was removed externally; forget stale mapping so a new one can be created.
-        guild_mapping = self._user_channels.get(guild.id)
-        if guild_mapping and channel_id in guild_mapping.values():
-            stale_keys = [uid for uid, cid in guild_mapping.items() if cid == channel_id]
-            for uid in stale_keys:
-                del guild_mapping[uid]
+        for channel_id in channel_ids:
+            channel = guild.get_channel(channel_id)
+            if isinstance(channel, discord.VoiceChannel):
+                if channel_id not in valid_ids:
+                    valid_ids.append(channel_id)
+                if existing is None:
+                    existing = channel
+            else:
+                self.channel_store.remove_channel(guild.id, user_id, channel_id)
 
+        if valid_ids:
+            guild_mapping[user_id] = valid_ids
+            self.channel_store.set_channels(guild.id, user_id, valid_ids)
+        else:
+            guild_mapping.pop(user_id, None)
+            self.channel_store.set_channels(guild.id, user_id, [])
             if not guild_mapping:
-                del self._user_channels[guild.id]
+                self._user_channels.pop(guild.id, None)
 
-        return None
+        return existing
 
     def _find_owner(self, guild_id: int, channel_id: int) -> Optional[int]:
         guild_mapping = self._user_channels.get(guild_id)
         if not guild_mapping:
             return None
 
-        for user_id, stored_channel_id in guild_mapping.items():
-            if stored_channel_id == channel_id:
+        for user_id, stored_channel_ids in guild_mapping.items():
+            if channel_id in stored_channel_ids:
                 return user_id
         return None
 
-    def _forget_channel(self, guild_id: int, user_id: int) -> None:
+    def _forget_channel(self, guild_id: int, user_id: int, channel_id: int) -> None:
         guild_mapping = self._user_channels.get(guild_id)
         if not guild_mapping:
+            self.channel_store.set_channels(guild_id, user_id, [])
             return
 
-        guild_mapping.pop(user_id, None)
-        if not guild_mapping:
-            del self._user_channels[guild_id]
+        user_channels = guild_mapping.get(user_id)
+        if not user_channels:
+            self.channel_store.set_channels(guild_id, user_id, [])
+            if not guild_mapping:
+                self._user_channels.pop(guild_id, None)
+            return
+
+        filtered = [cid for cid in user_channels if cid != channel_id]
+        if filtered:
+            guild_mapping[user_id] = filtered
+            self.channel_store.set_channels(guild_id, user_id, filtered)
+        else:
+            guild_mapping.pop(user_id, None)
+            self.channel_store.set_channels(guild_id, user_id, [])
+            if not guild_mapping:
+                self._user_channels.pop(guild_id, None)
 
 
 __all__ = [
@@ -204,5 +316,6 @@ __all__ = [
     "TempVCCategoryNotFoundError",
     "TempVCCategoryNotConfiguredError",
     "TempVCCategoryStore",
+    "TempVCChannelStore",
     "TempVoiceChannelManager",
 ]
