@@ -1,4 +1,3 @@
-import asyncio
 from dataclasses import dataclass
 
 from bot import BotClient, register_commands
@@ -15,7 +14,6 @@ class DiscordApplication:
             await self.client.start(self.token)
 
 async def build_discord_app(config: AppConfig) -> DiscordApplication:
-    
     temp_vc_manager = None
     if config.discord.temp_vc_category_id is not None:
         temp_vc_manager = TempVoiceChannelManager(category_id=config.discord.temp_vc_category_id)
