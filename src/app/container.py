@@ -2,6 +2,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from bot import BotClient, register_commands
+from bot.bridge import (
+    BridgeProfileStore,
+    ChannelBridgeManager,
+    load_channel_routes,
+)
 from bot.temp_vc import TempVoiceChannelManager, TempVCCategoryStore
 from app.config import AppConfig
 from tinydb import TinyDB
@@ -24,7 +29,17 @@ async def build_discord_app(config: AppConfig) -> DiscordApplication:
         category_store=TempVCCategoryStore(temp_vc_db),
     )
 
+    bridge_profiles_db = TinyDB(data_dir / "bridge_profiles.json")
+    profile_store = BridgeProfileStore(bridge_profiles_db)
+    routes = load_channel_routes(data_dir / "channel_routes.json")
+
     client = BotClient(temp_vc_manager=temp_vc_manager)
+    client.bridge_manager = ChannelBridgeManager(
+        client=client,
+        profile_store=profile_store,
+        routes=routes,
+    )
+
     await register_commands(client)
     print("Discord bot client initialized with commands registered.")
     return DiscordApplication(client=client, token=config.discord.token)
