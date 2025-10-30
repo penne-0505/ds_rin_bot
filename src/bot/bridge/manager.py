@@ -251,49 +251,54 @@ class ChannelBridgeManager:
         target: ChannelEndpoint,
     ) -> Optional[MirrorPayload]:
         attachments = await self._prepare_attachments(source_message.attachments)
-        lines: List[str] = []
+        body_lines: List[str] = []
 
         if source_message.reference:
             reference_line = self._format_reference(source_message, target=target)
             if reference_line:
-                lines.append(reference_line)
+                body_lines.append(reference_line)
 
         if dicebear_failed:
-            lines.append("(DiceBear生成失敗)")
-
-        if source_message.content:
-            lines.append(source_message.content)
+            body_lines.append("(DiceBear生成失敗)")
 
         if source_message.stickers:
             for sticker in source_message.stickers:
-                lines.append(f"(ステッカー: {sticker.name})")
+                body_lines.append(f"(ステッカー: {sticker.name})")
 
-        lines.extend(attachments.notes)
-        lines.append(f"元メッセージ: {source_message.jump_url}")
+        body_lines.extend(attachments.notes)
 
-        description = "\n".join(filter(None, lines)).strip()
+        description = "\n".join(filter(None, body_lines)).strip()
+
         if not description:
-            description = "(空メッセージ)"
+            description = None
+
+        title_text = source_message.content or "(空メッセージ)"
+        if len(title_text) > 256:
+            title_ellipsis = "..."
+            title_text = title_text[: 256 - len(title_ellipsis)] + title_ellipsis
 
         embed: Optional[discord.Embed] = None
         content: Optional[str] = None
 
-        if len(description) <= 4096:
-            embed = discord.Embed(description=description, colour=discord.Colour.blurple())
-            embed.set_author(name=profile.display_name, icon_url=profile.avatar_url)
-            footer_text = (
-                f"{source_message.author.display_name} @ {source_message.guild.name}"
-                if source_message.guild else str(source_message.author)
-            )
-            embed.set_footer(text=footer_text)
+        if len(title_text) <= 256:
+            embed = discord.Embed(title=title_text, colour=discord.Colour.blurple())
+            if description is not None:
+                embed.description = description
+        else:
+            embed = None
+            truncated_description = description or ""
+            if len(truncated_description) > 1900:
+                truncated_description = truncated_description[:1870] + "\n...(省略)"
+            content_lines: List[str] = [title_text]
+            if truncated_description:
+                content_lines.append(truncated_description)
+            if dicebear_failed:
+                content_lines.append("(DiceBear生成失敗)")
+            content = "\n".join(content_lines)
+
+        if embed is not None:
             if attachments.image_filename:
                 embed.set_image(url=f"attachment://{attachments.image_filename}")
-        else:
-            truncated = description
-            if len(truncated) > 1900:
-                truncated = truncated[:1870] + "\n...(省略)"
-            content_lines = [profile.display_name, truncated]
-            content = "\n".join(content_lines)
 
         return MirrorPayload(
             embed=embed,
