@@ -272,8 +272,8 @@ class ChannelBridgeManager:
         if not description:
             description = None
 
-        title_text = f"> {source_message.content}" or "(空メッセージ)"
-        message_content = f"⠀ ⠀ ｜⠀ ⠀**{source_message.content}**" or "(空メッセージ)"
+        title_text = source_message.content or "(空メッセージ)"
+        message_content = source_message.content or "(空メッセージ)"
         if len(message_content) > 4096:
             message_content = message_content[:4066] + "\n...(省略)"
 
