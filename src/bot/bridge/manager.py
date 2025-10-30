@@ -284,16 +284,15 @@ class ChannelBridgeManager:
             embed = discord.Embed(title=title_text, colour=discord.Colour.blurple())
             if description is not None:
                 embed.description = description
+            embed.set_author(name=profile.display_name, icon_url=profile.avatar_url)
         else:
             embed = None
             truncated_description = description or ""
             if len(truncated_description) > 1900:
                 truncated_description = truncated_description[:1870] + "\n...(省略)"
-            content_lines: List[str] = [title_text]
+            content_lines: List[str] = [profile.display_name, title_text]
             if truncated_description:
                 content_lines.append(truncated_description)
-            if dicebear_failed:
-                content_lines.append("(DiceBear生成失敗)")
             content = "\n".join(content_lines)
 
         if embed is not None:
