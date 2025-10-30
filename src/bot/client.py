@@ -37,6 +37,7 @@ class BotClient(discord.Client):
         LOGGER.info("ログイン完了: %s (ID: %s)", self.user, self.user.id)
         await self.tree.sync()
         LOGGER.info("アプリケーションコマンドの同期が完了しました。")
+        LOGGER.info("準備完了。")
 
     async def on_voice_state_update(
         self,
