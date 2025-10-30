@@ -1,8 +1,10 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 from bot import BotClient, register_commands
-from bot.temp_vc import TempVoiceChannelManager
+from bot.temp_vc import TempVoiceChannelManager, TempVCCategoryStore
 from app.config import AppConfig
+from tinydb import TinyDB
 
 @dataclass(slots=True)
 class DiscordApplication:
@@ -14,9 +16,13 @@ class DiscordApplication:
             await self.client.start(self.token)
 
 async def build_discord_app(config: AppConfig) -> DiscordApplication:
-    temp_vc_manager = None
-    if config.discord.temp_vc_category_id is not None:
-        temp_vc_manager = TempVoiceChannelManager(category_id=config.discord.temp_vc_category_id)
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    temp_vc_db = TinyDB(data_dir / "temp_vc.json")
+    temp_vc_manager = TempVoiceChannelManager(
+        category_store=TempVCCategoryStore(temp_vc_db),
+    )
 
     client = BotClient(temp_vc_manager=temp_vc_manager)
     await register_commands(client)
