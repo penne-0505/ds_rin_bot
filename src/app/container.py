@@ -7,7 +7,7 @@ from bot.bridge import (
     ChannelBridgeManager,
     load_channel_routes,
 )
-from bot.temp_vc import TempVoiceChannelManager, TempVCCategoryStore
+from bot.temp_vc import TempVCChannelStore, TempVCCategoryStore, TempVoiceChannelManager
 from app.config import AppConfig
 from tinydb import TinyDB
 
@@ -25,8 +25,11 @@ async def build_discord_app(config: AppConfig) -> DiscordApplication:
     data_dir.mkdir(parents=True, exist_ok=True)
 
     temp_vc_db = TinyDB(data_dir / "temp_vc.json")
+    temp_vc_category_store = TempVCCategoryStore(temp_vc_db)
+    temp_vc_channel_store = TempVCChannelStore(temp_vc_db)
     temp_vc_manager = TempVoiceChannelManager(
-        category_store=TempVCCategoryStore(temp_vc_db),
+        category_store=temp_vc_category_store,
+        channel_store=temp_vc_channel_store,
     )
 
     bridge_profiles_db = TinyDB(data_dir / "bridge_profiles.json")

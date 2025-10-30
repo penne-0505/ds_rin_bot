@@ -17,7 +17,7 @@ def _load_env_file(env_file: str | Path | None) -> None:
     if env_file is None:
         load_dotenv()
         return
-    
+
     path = Path(env_file)
     if path.is_file():
         load_dotenv(dotenv_path=path)
@@ -30,7 +30,7 @@ def _prepare_client_token(raw_token: str | None) -> str:
         raise ValueError("Discord bot token is not set in environment variables.")
     return raw_token.strip()
 
-def load_config(env_file: str | Path | None = Path(".env")) -> AppConfig:
+def load_config(env_file: str | Path | None = None) -> AppConfig:
     """設定を読み込む"""
     _load_env_file(env_file)
     
