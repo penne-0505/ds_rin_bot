@@ -259,7 +259,7 @@ class ChannelBridgeManager:
                 body_lines.append(reference_line)
 
         if dicebear_failed:
-            body_lines.append("(DiceBear生成失敗)")
+            body_lines.append("(アイコン生成失敗)")
 
         if source_message.stickers:
             for sticker in source_message.stickers:
@@ -273,24 +273,28 @@ class ChannelBridgeManager:
             description = None
 
         title_text = f"> {source_message.content}" or "(空メッセージ)"
-        if len(title_text) > 256:
-            title_ellipsis = "..."
-            title_text = title_text[: 256 - len(title_ellipsis)] + title_ellipsis
+        message_content = source_message.content or "(空メッセージ)"
+        if len(message_content) > 4096:
+            message_content = message_content[:4066] + "\n...(省略)"
 
         embed: Optional[discord.Embed] = None
         content: Optional[str] = None
 
-        if len(title_text) <= 256:
-            embed = discord.Embed(title=title_text, colour=discord.Colour.blurple())
-            if description is not None:
-                embed.description = description
+        if len(message_content) <= 4096:
+            parts: List[str] = [message_content]
+            if description:
+                parts.append(description)
+            embed = discord.Embed(
+                description="\n".join(parts),
+                colour=discord.Colour.dark_blue(),
+            )
             embed.set_author(name=profile.display_name, icon_url=profile.avatar_url)
         else:
             embed = None
             truncated_description = description or ""
             if len(truncated_description) > 1900:
                 truncated_description = truncated_description[:1870] + "\n...(省略)"
-            content_lines: List[str] = [profile.display_name, title_text]
+            content_lines: List[str] = [profile.display_name, message_content]
             if truncated_description:
                 content_lines.append(truncated_description)
             content = "\n".join(content_lines)
@@ -298,7 +302,6 @@ class ChannelBridgeManager:
         if embed is not None:
             if attachments.image_filename:
                 embed.set_image(url=f"attachment://{attachments.image_filename}")
-
         return MirrorPayload(
             embed=embed,
             content=content,
