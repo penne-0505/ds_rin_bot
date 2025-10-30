@@ -16,7 +16,7 @@ from bot.temp_vc import (
 async def register_commands(client: "BotClient") -> None:
     tree = client.tree
     
-    @tree.command()
+    @tree.command(name="setup", description="メッセージ送信のセットアップを行います。")
     async def command_setup(interaction: discord.Interaction) -> None:
         print("command executed: command_setup")
         await interaction.response.defer()
