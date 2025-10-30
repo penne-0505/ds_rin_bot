@@ -18,10 +18,10 @@ class SendMessageModal(discord.ui.Modal, title="メッセージ送信"):
     channel_id = discord.ui.TextInput(label="チャンネルID", placeholder="送信先チャンネルのIDを入力", required=True)
     message = discord.ui.TextInput(label="本文", style=discord.TextStyle.paragraph, placeholder="メッセージ内容を入力", required=True)
 
-    ERROR_INVALID_ID = "❌ チャンネルIDは有効な整数である必要があります。"
-    ERROR_CHANNEL_NOT_FOUND = "⚠️ チャンネルが見つかりません。Botがアクセスできるか確認してください。"
-    SUCCESS_MESSAGE = "✅ <#{channel_id}> にメッセージを送信しました。"
-    ERROR_GENERAL = "❌ エラー: {error}"
+    ERROR_INVALID_ID = "チャンネルIDは有効な整数である必要があります。"
+    ERROR_CHANNEL_NOT_FOUND = "チャンネルが見つかりません。Botがアクセスできるか確認してください。"
+    SUCCESS_MESSAGE = "<#{channel_id}> にメッセージを送信しました。"
+    ERROR_GENERAL = "エラー: {error}"
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         try:
