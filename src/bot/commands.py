@@ -126,10 +126,34 @@ async def register_commands(client: "BotClient") -> None:
 
             async def callback(self, select_interaction: discord.Interaction) -> None:
                 selected_id = int(self.values[0])
-                manager.set_category_for_guild(guild_id=guild.id, category_id=selected_id)
+                self.view.selected_category_id = selected_id
                 category = guild.get_channel(selected_id)
                 category_name = category.mention if isinstance(category, discord.CategoryChannel) else f"ID: {selected_id}"
                 await select_interaction.response.edit_message(
+                    content=(
+                        f"設定する一時VCのカテゴリ候補: {category_name}\n"
+                        "内容を確認して『確定』を押してください。"
+                    ),
+                    view=self.view,
+                )
+
+        class ConfirmButton(discord.ui.Button):
+            def __init__(self) -> None:
+                super().__init__(label="確定", style=discord.ButtonStyle.primary)
+
+            async def callback(self, button_interaction: discord.Interaction) -> None:
+                selected_id = getattr(self.view, "selected_category_id", None)
+                if selected_id is None:
+                    await button_interaction.response.send_message(
+                        "先にカテゴリを選択してください。",
+                        ephemeral=True,
+                    )
+                    return
+
+                manager.set_category_for_guild(guild_id=guild.id, category_id=selected_id)
+                category = guild.get_channel(selected_id)
+                category_name = category.mention if isinstance(category, discord.CategoryChannel) else f"ID: {selected_id}"
+                await button_interaction.response.edit_message(
                     content=f"一時VCのカテゴリを {category_name} に設定しました。",
                     view=None,
                 )
@@ -138,10 +162,12 @@ async def register_commands(client: "BotClient") -> None:
         class CategorySelectView(discord.ui.View):
             def __init__(self) -> None:
                 super().__init__(timeout=180)
+                self.selected_category_id = current_category_id
                 self.add_item(CategorySelect())
+                self.add_item(ConfirmButton())
 
         await interaction.response.send_message(
-            "一時VCの作成先カテゴリを選択してください。",
+            "一時VCの作成先カテゴリを選択し、『確定』を押してください。",
             view=CategorySelectView(),
             ephemeral=True,
         )
