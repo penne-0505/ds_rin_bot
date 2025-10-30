@@ -53,6 +53,12 @@ class BotClient(discord.Client):
         if self.bridge_manager is not None:
             await self.bridge_manager.handle_message(message)
 
+    async def on_message_edit(
+        self, before: discord.Message, after: discord.Message
+    ) -> None:
+        if self.bridge_manager is not None:
+            await self.bridge_manager.handle_message_edit(before, after)
+
     async def on_reaction_add(
         self,
         reaction: discord.Reaction,
