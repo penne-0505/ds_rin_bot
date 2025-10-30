@@ -1,6 +1,12 @@
+from __future__ import annotations
+
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
+from tinydb import TinyDB
+
+from app.config import AppConfig
 from bot import BotClient, register_commands
 from bot.bridge import (
     BridgeProfileStore,
@@ -8,19 +14,28 @@ from bot.bridge import (
     load_channel_routes,
 )
 from bot.temp_vc import TempVCChannelStore, TempVCCategoryStore, TempVoiceChannelManager
-from app.config import AppConfig
-from tinydb import TinyDB
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 @dataclass(slots=True)
 class DiscordApplication:
+    """Discord クライアントとトークンを保持し、実行処理を提供する。"""
+
     client: BotClient
     token: str
-    
+
     async def run(self) -> None:
+        """クライアントを起動する。"""
+
         async with self.client:
             await self.client.start(self.token)
 
+
 async def build_discord_app(config: AppConfig) -> DiscordApplication:
+    """アプリケーションの依存関係を構築し、DiscordApplication を返す。"""
+
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -44,10 +59,8 @@ async def build_discord_app(config: AppConfig) -> DiscordApplication:
     )
 
     await register_commands(client)
-    print("Discord bot client initialized with commands registered.")
+    LOGGER.info("Discord クライアントの初期化が完了し、コマンドを登録しました。")
     return DiscordApplication(client=client, token=config.discord.token)
 
-__all__ = [
-    "DiscordApplication",
-    "build_discord_app",
-]
+
+__all__ = ["DiscordApplication", "build_discord_app"]

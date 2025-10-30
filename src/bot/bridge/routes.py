@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Sequence
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
@@ -13,10 +16,7 @@ class ChannelEndpoint:
 
     @classmethod
     def from_payload(cls, payload: dict) -> "ChannelEndpoint":
-        return cls(
-            guild=int(payload["guild"]),
-            channel=int(payload["channel"]),
-        )
+        return cls(guild=int(payload["guild"]), channel=int(payload["channel"]))
 
     def key(self) -> tuple[int, int]:
         return (self.guild, self.channel)
@@ -50,7 +50,7 @@ def load_channel_routes(path: Path) -> Sequence[ChannelRoute]:
             json.dumps(DEFAULT_ROUTE_SAMPLE, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(f"Channel routing configuration not found. Sample created at: {path}")
+        LOGGER.warning("チャンネルブリッジ設定が見つかりません。サンプルを作成しました: %s", path)
         return ()
 
     try:
@@ -64,11 +64,13 @@ def load_channel_routes(path: Path) -> Sequence[ChannelRoute]:
             src = ChannelEndpoint.from_payload(entry["src"])
             dst = ChannelEndpoint.from_payload(entry["dst"])
         except (KeyError, TypeError, ValueError) as exc:
-            print(f"Invalid route entry skipped: {entry} ({exc})")
+            LOGGER.warning("不正なルート定義をスキップしました: entry=%s, error=%s", entry, exc)
             continue
-        
-        print(f"Loaded channel route: {src} -> {dst}")
-        
+
+        LOGGER.info("チャンネルブリッジを読み込み: %s -> %s", src, dst)
         routes.append(ChannelRoute(src=src, dst=dst))
 
     return routes
+
+
+__all__ = ["ChannelEndpoint", "ChannelRoute", "load_channel_routes"]

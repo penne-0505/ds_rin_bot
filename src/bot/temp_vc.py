@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import discord
 from tinydb import Query, TinyDB
 from tinydb.table import Table
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class TempVCError(Exception):
@@ -83,6 +87,7 @@ class TempVCChannelStore:
                 guild_id = int(record["guild_id"])
                 user_id = int(record["user_id"])
             except (KeyError, TypeError, ValueError):
+                LOGGER.warning("無効な一時VCレコードをスキップしました: %s", record)
                 continue
 
             channel_ids = self._sanitize_channel_ids(record.get("channel_ids"))
@@ -223,7 +228,7 @@ class TempVoiceChannelManager:
         try:
             await channel.delete(reason="Temporary voice channel cleanup (empty)")
         except discord.HTTPException as exc:
-            print(f"Failed to delete temporary voice channel {channel.id}: {exc}")
+            LOGGER.warning("一時VCの削除に失敗しました: channel_id=%s error=%s", channel.id, exc)
             return
 
         self._forget_channel(channel.guild.id, owner_user_id, channel.id)
@@ -263,6 +268,12 @@ class TempVoiceChannelManager:
                 if existing is None:
                     existing = channel
             else:
+                LOGGER.info(
+                    "存在しない一時VCを登録解除します: guild_id=%s user_id=%s channel_id=%s",
+                    guild.id,
+                    user_id,
+                    channel_id,
+                )
                 self.channel_store.remove_channel(guild.id, user_id, channel_id)
 
         if valid_ids:
