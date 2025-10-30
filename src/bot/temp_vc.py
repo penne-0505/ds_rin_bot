@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import discord
 from tinydb import Query, TinyDB
+from tinydb.table import Table
 
 
 class TempVCError(Exception):
@@ -41,6 +42,8 @@ class TempVCCategoryStore:
 
     db: TinyDB
     table_name: str = "temp_vc_categories"
+    _table: Table = field(init=False, repr=False)
+    _query: Query = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         self._table = self.db.table(self.table_name)
