@@ -1,14 +1,22 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING
 
 import discord
+
 
 if TYPE_CHECKING:
     from .bridge import ChannelBridgeManager
     from .temp_vc import TempVoiceChannelManager
 
+
+LOGGER = logging.getLogger(__name__)
+
+
 class BotClient(discord.Client):
+    """Discord Client 拡張。音声チャンネルやブリッジ機能の管理を行う。"""
+
     def __init__(
         self,
         *,
@@ -20,12 +28,15 @@ class BotClient(discord.Client):
         self.tree = discord.app_commands.CommandTree(self)
         self.temp_vc_manager = temp_vc_manager
         self.bridge_manager = bridge_manager
-    
+
     async def on_ready(self) -> None:
-        print(f'Logged in as {self.user} (ID: {self.user.id})')
-        print('------')
+        if self.user is None:
+            LOGGER.warning("クライアントユーザー情報を取得できませんでした。")
+            return
+
+        LOGGER.info("ログイン完了: %s (ID: %s)", self.user, self.user.id)
         await self.tree.sync()
-        print("Bot is ready and command tree synced.")
+        LOGGER.info("アプリケーションコマンドの同期が完了しました。")
 
     async def on_voice_state_update(
         self,

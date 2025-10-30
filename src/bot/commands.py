@@ -1,27 +1,35 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Tuple, TYPE_CHECKING
-if TYPE_CHECKING:
-    from bot.client import BotClient
 
 import discord
 
-from views import SendModalView
+from bot.bridge.routes import ChannelEndpoint
 from bot.temp_vc import (
     TempVCAlreadyExistsError,
     TempVCCategoryNotConfiguredError,
     TempVCCategoryNotFoundError,
 )
-from bot.bridge.routes import ChannelEndpoint
+from views import SendModalView
+
+
+if TYPE_CHECKING:
+    from bot.client import BotClient
+
+
+LOGGER = logging.getLogger(__name__)
+
 
 async def register_commands(client: "BotClient") -> None:
+    """クライアントのアプリケーションコマンドを登録する。"""
+
     tree = client.tree
-    
+
     @tree.command(name="setup", description="メッセージ送信のセットアップを行います。")
     async def command_setup(interaction: discord.Interaction) -> None:
-        print("command executed: command_setup")
+        LOGGER.info("/setup コマンドを実行したユーザー: %s", interaction.user)
         await interaction.response.defer()
-        """UI付きメッセージを送る"""
         view = SendModalView()
         await interaction.followup.send(
             "📨 下のボタンからメッセージ送信モーダルを開けます。",
@@ -32,51 +40,51 @@ async def register_commands(client: "BotClient") -> None:
     async def create_temp_vc(interaction: discord.Interaction) -> None:
         manager = client.temp_vc_manager
         if manager is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "一時VC機能が設定されていません。管理者に連絡してください。",
-                ephemeral=True,
             )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "このコマンドはサーバー内でのみ使用できます。",
-                ephemeral=True,
             )
             return
 
         try:
             channel = await manager.create_user_channel(guild=guild, user=interaction.user)
         except TempVCAlreadyExistsError as err:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 f"すでに専用チャンネルがあります: {err.channel.mention}",
-                ephemeral=True,
             )
             return
         except TempVCCategoryNotConfiguredError:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "専用チャンネル用のカテゴリーが未設定です。管理者に連絡してください。",
-                ephemeral=True,
             )
             return
         except TempVCCategoryNotFoundError:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "専用チャンネル用のカテゴリーが見つかりませんでした。管理者に連絡してください。",
-                ephemeral=True,
             )
             return
-        except Exception as exc:  # 予期しないエラーはユーザーに共有しつつログに残す
-            print(f"Unexpected error during temporary VC creation: {exc}")
-            await interaction.response.send_message(
+        except Exception:  # pragma: no cover - 予期しないエラーの記録
+            LOGGER.exception("一時VC作成中に予期しないエラーが発生しました。")
+            await _send_ephemeral(
+                interaction,
                 "チャンネルの作成中にエラーが発生しました。しばらくしてから再試行してください。",
-                ephemeral=True,
             )
             return
 
-        await interaction.response.send_message(
+        await _send_ephemeral(
+            interaction,
             f"ボイスチャンネルを作成しました: {channel.mention}\n誰もいなくなったら自動で削除されます。",
-            ephemeral=True,
         )
 
     @tree.command(name="vc_category", description="一時VCの作成先カテゴリを設定します。")
@@ -84,25 +92,25 @@ async def register_commands(client: "BotClient") -> None:
     async def configure_temp_vc_category(interaction: discord.Interaction) -> None:
         manager = client.temp_vc_manager
         if manager is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "一時VC機能が初期化されていません。ボットのログを確認してください。",
-                ephemeral=True,
             )
             return
 
         guild = interaction.guild
         if guild is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "このコマンドはサーバー内でのみ使用できます。",
-                ephemeral=True,
             )
             return
 
         categories = guild.categories[:25]
         if not categories:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "カテゴリが見つかりません。サーバーにカテゴリを作成してから再試行してください。",
-                ephemeral=True,
             )
             return
 
@@ -170,26 +178,26 @@ async def register_commands(client: "BotClient") -> None:
     @tree.command(name="bridge_links", description="このギルドに設定されているチャンネルブリッジを表示します。")
     async def bridge_links(interaction: discord.Interaction) -> None:
         if interaction.guild is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "このコマンドはサーバー内でのみ使用できます。",
-                ephemeral=True,
             )
             return
 
         manager = client.bridge_manager
         if manager is None:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "チャンネルブリッジ機能が有効になっていません。",
-                ephemeral=True,
             )
             return
 
         guild = interaction.guild
         routes = manager.get_routes_from_guild(guild.id)
         if not routes:
-            await interaction.response.send_message(
+            await _send_ephemeral(
+                interaction,
                 "このギルドにはブリッジ連携が設定されていません。",
-                ephemeral=True,
             )
             return
 
@@ -211,7 +219,7 @@ async def register_commands(client: "BotClient") -> None:
                     try:
                         endpoint_guild = await client.fetch_guild(endpoint.guild)
                     except discord.HTTPException as exc:
-                        print(f"Failed to fetch guild {endpoint.guild}: {exc}")
+                        LOGGER.warning("ギルドの取得に失敗しました: guild=%s, error=%s", endpoint.guild, exc)
 
             if endpoint_guild is not None:
                 guild_label = f"{endpoint_guild.name} (ID: {endpoint_guild.id})"
@@ -229,7 +237,7 @@ async def register_commands(client: "BotClient") -> None:
                 try:
                     fetched_channel = await client.fetch_channel(endpoint.channel)
                 except discord.HTTPException as exc:
-                    print(f"Failed to fetch channel {endpoint.channel}: {exc}")
+                    LOGGER.warning("チャンネルの取得に失敗しました: channel=%s, error=%s", endpoint.channel, exc)
                 else:
                     if isinstance(fetched_channel, (discord.abc.GuildChannel, discord.Thread)):
                         channel_obj = fetched_channel
@@ -256,6 +264,14 @@ async def register_commands(client: "BotClient") -> None:
         message = "🔗 設定されているチャンネルブリッジ\n" + "\n".join(lines)
         await interaction.followup.send(message, ephemeral=True)
 
-__all__ = [
-    "register_commands",
-]
+
+async def _send_ephemeral(interaction: discord.Interaction, message: str) -> None:
+    """対話からエフェメラルメッセージを送信する補助関数。"""
+
+    if interaction.response.is_done():
+        await interaction.followup.send(message, ephemeral=True)
+    else:
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+__all__ = ["register_commands"]
