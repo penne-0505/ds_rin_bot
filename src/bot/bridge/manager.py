@@ -55,6 +55,13 @@ class ChannelBridgeManager:
             self._routes_by_source.setdefault(key, []).append(route)
         print(f"Loaded {len(routes)} channel bridge routes.")
 
+    def get_routes_from_guild(self, guild_id: int) -> Sequence[ChannelRoute]:
+        matches: List[ChannelRoute] = []
+        for (src_guild_id, _), routes in self._routes_by_source.items():
+            if src_guild_id == guild_id:
+                matches.extend(routes)
+        return list(matches)
+
     async def handle_message(self, message: discord.Message) -> None:
         if message.author.bot:
             return
