@@ -6,11 +6,11 @@ authors = [
     {name = "penne",email = "penne0505pp@gmail.com"}
 ]
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<4.0"
 dependencies = [
     "discord (>=2.3.2,<3.0.0)",
     "python-dotenv (>=1.2.1,<2.0.0)",
-    "tinydb (>=4.8.0,<5.0.0)"
+    "tinydb (>=4.8.2,<5.0.0)",
 ]
 
 
