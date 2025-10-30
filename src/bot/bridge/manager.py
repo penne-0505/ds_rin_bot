@@ -272,7 +272,7 @@ class ChannelBridgeManager:
         if not description:
             description = None
 
-        title_text = source_message.content or "(空メッセージ)"
+        title_text = f"> {source_message.content}" or "(空メッセージ)"
         if len(title_text) > 256:
             title_ellipsis = "..."
             title_text = title_text[: 256 - len(title_ellipsis)] + title_ellipsis
