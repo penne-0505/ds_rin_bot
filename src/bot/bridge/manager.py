@@ -46,6 +46,7 @@ class ChannelBridgeManager:
         self._routes_by_source: Dict[Tuple[int, int], List[ChannelRoute]] = {}
         self._message_links: Dict[int, Set[int]] = {}
         self._message_locations: Dict[int, Tuple[Optional[int], int]] = {}
+        self._mirrored_message_ids: Set[int] = set()
         self._build_route_index(routes)
 
     def _build_route_index(self, routes: Sequence[ChannelRoute]) -> None:
@@ -58,6 +59,8 @@ class ChannelBridgeManager:
         if message.author.bot:
             return
         if message.guild is None:
+            return
+        if message.id in self._mirrored_message_ids:
             return
 
         key = (message.guild.id, message.channel.id)
@@ -96,6 +99,7 @@ class ChannelBridgeManager:
                 source_message=message,
                 profile=profile,
                 dicebear_failed=dicebear_failed,
+                target=route.dst,
             )
 
             if payload is None:
@@ -119,6 +123,7 @@ class ChannelBridgeManager:
 
             self._store_message_location(mirrored)
             self._link_messages(message.id, mirrored.id)
+            self._mirrored_message_ids.add(mirrored.id)
 
     async def handle_reaction(
         self,
@@ -172,6 +177,7 @@ class ChannelBridgeManager:
                 if not peers:
                     self._message_links.pop(linked_id, None)
         self._message_locations.pop(message_id, None)
+        self._mirrored_message_ids.discard(message_id)
 
     def _link_messages(self, source_id: int, target_id: int) -> None:
         self._message_links.setdefault(source_id, set()).add(target_id)
@@ -192,8 +198,10 @@ class ChannelBridgeManager:
 
         if message_a not in self._message_links:
             self._message_locations.pop(message_a, None)
+            self._mirrored_message_ids.discard(message_a)
         if message_b not in self._message_links:
             self._message_locations.pop(message_b, None)
+            self._mirrored_message_ids.discard(message_b)
 
     def _store_message_location(self, message: discord.Message) -> None:
         guild_id = message.guild.id if message.guild else None
@@ -233,12 +241,13 @@ class ChannelBridgeManager:
         source_message: discord.Message,
         profile: BridgeProfile,
         dicebear_failed: bool,
+        target: ChannelEndpoint,
     ) -> Optional[MirrorPayload]:
         attachments = await self._prepare_attachments(source_message.attachments)
         lines: List[str] = []
 
         if source_message.reference:
-            reference_line = self._format_reference(source_message)
+            reference_line = self._format_reference(source_message, target=target)
             if reference_line:
                 lines.append(reference_line)
 
@@ -321,16 +330,44 @@ class ChannelBridgeManager:
             return ATTACHMENT_LABELS["audio"]
         return ATTACHMENT_LABELS["default"]
 
-    def _format_reference(self, message: discord.Message) -> Optional[str]:
+    def _format_reference(self, message: discord.Message, *, target: ChannelEndpoint) -> Optional[str]:
         ref = message.reference
         if ref is None:
             return None
 
         if ref.resolved and isinstance(ref.resolved, discord.Message):
+            referenced_id = ref.resolved.id
             jump_url = ref.resolved.jump_url
         else:
             if ref.guild_id is None or ref.channel_id is None or ref.message_id is None:
                 return None
+            referenced_id = ref.message_id
             jump_url = f"https://discord.com/channels/{ref.guild_id}/{ref.channel_id}/{ref.message_id}"
 
-        return f"▶ Reply to {jump_url}"
+        remapped = self._remap_reference_jump_url(referenced_id=referenced_id, target=target)
+        effective_url = remapped or jump_url
+
+        return f"▶ Reply to {effective_url}"
+
+    def _remap_reference_jump_url(
+        self,
+        *,
+        referenced_id: int,
+        target: ChannelEndpoint,
+    ) -> Optional[str]:
+        target_key = (target.guild, target.channel)
+
+        location = self._message_locations.get(referenced_id)
+        if location == target_key:
+            return f"https://discord.com/channels/{target.guild}/{target.channel}/{referenced_id}"
+
+        linked_ids = self._message_links.get(referenced_id)
+        if not linked_ids:
+            return None
+
+        for linked_id in linked_ids:
+            location = self._message_locations.get(linked_id)
+            if location == target_key:
+                return f"https://discord.com/channels/{target.guild}/{target.channel}/{linked_id}"
+
+        return None
