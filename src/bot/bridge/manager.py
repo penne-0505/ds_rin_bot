@@ -121,6 +121,99 @@ class ChannelBridgeManager:
             self._link_messages(message.id, mirrored.id)
             self._mirrored_message_ids.add(mirrored.id)
 
+    async def handle_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        if after.author.bot:
+            return
+        if after.guild is None:
+            return
+        if after.id in self._mirrored_message_ids:
+            return
+
+        linked_ids = self._message_links.get(after.id)
+        if not linked_ids:
+            return
+
+        dicebear_failed = False
+        try:
+            profile = self._profile_store.get_profile(
+                seed=f"{after.author.id}-{date.today().isoformat()}"
+            )
+        except Exception as exc:  # pragma: no cover - 外部APIの不調に備える
+            dicebear_failed = True
+            LOGGER.warning(
+                "DiceBear プロフィール生成に失敗しました: message_id=%s error=%s",
+                after.id,
+                exc,
+            )
+            bot_user = self._client.user
+            fallback_avatar = str(bot_user.display_avatar.url) if bot_user else ""
+            profile = BridgeProfile(seed="fallback", display_name="仮想伝令", avatar_url=fallback_avatar)
+
+        _, attachment_notes = self._summarize_attachment_notes(after.attachments)
+
+        base_annotations: List[str] = []
+        if dicebear_failed:
+            base_annotations.append("(アイコン生成失敗)")
+        if after.stickers:
+            for sticker in after.stickers:
+                base_annotations.append(f"(ステッカー: {sticker.name})")
+        base_annotations.extend(attachment_notes)
+
+        for linked_id in list(linked_ids):
+            channel = await self._resolve_channel_for_message(linked_id)
+            if channel is None:
+                continue
+
+            try:
+                target_message = await channel.fetch_message(linked_id)
+            except discord.HTTPException as exc:
+                LOGGER.warning(
+                    "編集対象メッセージの取得に失敗しました: source=%s target=%s error=%s",
+                    after.id,
+                    linked_id,
+                    exc,
+                )
+                continue
+
+            location = self._message_locations.get(linked_id)
+            if location is None:
+                continue
+            guild_id, channel_id = location
+            if guild_id is None:
+                continue
+
+            target_endpoint = ChannelEndpoint(guild=guild_id, channel=channel_id)
+            annotations = []
+            reference_line = self._format_reference(after, target=target_endpoint)
+            if reference_line:
+                annotations.append(reference_line)
+            annotations.extend(base_annotations)
+
+            embed, content = self._compose_mirror_texts(
+                raw_content=after.content,
+                annotations=annotations,
+                profile=profile,
+            )
+
+            if embed is not None:
+                image_filename = self._select_image_attachment_filename(target_message.attachments)
+                if image_filename:
+                    embed.set_image(url=f"attachment://{image_filename}")
+
+            try:
+                await target_message.edit(
+                    embed=embed,
+                    content=content,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
+            except discord.HTTPException as exc:
+                LOGGER.warning(
+                    "ブリッジメッセージの編集に失敗しました: source=%s target=%s error=%s",
+                    after.id,
+                    linked_id,
+                    exc,
+                )
+
     async def handle_reaction(self, reaction: discord.Reaction, user: discord.abc.User, *, add: bool) -> None:
         if user.bot:
             return
@@ -232,20 +325,39 @@ class ChannelBridgeManager:
         target: ChannelEndpoint,
     ) -> Optional[MirrorPayload]:
         attachments = await self._prepare_attachments(source_message.attachments)
-        body_lines: List[str] = []
+        annotations: List[str] = []
         if source_message.reference:
             reference_line = self._format_reference(source_message, target=target)
             if reference_line:
-                body_lines.append(reference_line)
+                annotations.append(reference_line)
         if dicebear_failed:
-            body_lines.append("(アイコン生成失敗)")
+            annotations.append("(アイコン生成失敗)")
         if source_message.stickers:
             for sticker in source_message.stickers:
-                body_lines.append(f"(ステッカー: {sticker.name})")
-        body_lines.extend(attachments.notes)
-        description = "\n".join(filter(None, body_lines)).strip() or None
+                annotations.append(f"(ステッカー: {sticker.name})")
+        annotations.extend(attachments.notes)
 
-        message_content = source_message.content or "(空メッセージ)"
+        embed, content = self._compose_mirror_texts(
+            raw_content=source_message.content,
+            annotations=annotations,
+            profile=profile,
+        )
+
+        if embed is not None and attachments.image_filename:
+            embed.set_image(url=f"attachment://{attachments.image_filename}")
+
+        return MirrorPayload(embed=embed, content=content, files=attachments.files)
+
+    def _compose_mirror_texts(
+        self,
+        *,
+        raw_content: Optional[str],
+        annotations: Sequence[str],
+        profile: BridgeProfile,
+    ) -> Tuple[Optional[discord.Embed], Optional[str]]:
+        description = "\n".join(filter(None, annotations)).strip() or None
+
+        message_content = raw_content or "(空メッセージ)"
         if len(message_content) > 4096:
             message_content = message_content[:4066] + "\n...(省略)"
 
@@ -266,10 +378,7 @@ class ChannelBridgeManager:
                 content_lines.append(truncated_description)
             content = "\n".join(content_lines)
 
-        if embed is not None and attachments.image_filename:
-            embed.set_image(url=f"attachment://{attachments.image_filename}")
-
-        return MirrorPayload(embed=embed, content=content, files=attachments.files)
+        return embed, content
 
     async def _prepare_attachments(self, attachments: Iterable[discord.Attachment]) -> AttachmentBundle:
         files: List[discord.File] = []
@@ -292,6 +401,29 @@ class ChannelBridgeManager:
                 notes.append(f"{label} {attachment.url}")
 
         return AttachmentBundle(files=files, image_filename=image_filename, notes=notes)
+
+    def _summarize_attachment_notes(
+        self, attachments: Sequence[discord.Attachment]
+    ) -> Tuple[Optional[str], List[str]]:
+        image_filename: Optional[str] = None
+        notes: List[str] = []
+
+        for attachment in attachments:
+            label = self._attachment_label(attachment)
+            if image_filename is None and label == ATTACHMENT_LABELS["image"]:
+                image_filename = attachment.filename
+                continue
+            notes.append(f"{label} {attachment.url}")
+
+        return image_filename, notes
+
+    def _select_image_attachment_filename(
+        self, attachments: Sequence[discord.Attachment]
+    ) -> Optional[str]:
+        for attachment in attachments:
+            if self._attachment_label(attachment) == ATTACHMENT_LABELS["image"]:
+                return attachment.filename
+        return None
 
     def _attachment_label(self, attachment: discord.Attachment) -> str:
         content_type = (attachment.content_type or "").lower()
