@@ -1,4 +1,5 @@
 import discord
+from discord.abc import Messageable
 
 class SendModalView(discord.ui.View):
     def __init__(self) -> None:
@@ -33,6 +34,16 @@ class SendMessageModal(discord.ui.Modal, title="メッセージ送信"):
         try:
             channel = interaction.client.get_channel(channel_id_int)
             if channel is None:
+                try:
+                    channel = await interaction.client.fetch_channel(channel_id_int)
+                except discord.NotFound:
+                    await interaction.response.send_message(self.ERROR_CHANNEL_NOT_FOUND, ephemeral=True)
+                    return
+                except discord.HTTPException as exc:
+                    await interaction.response.send_message(self.ERROR_GENERAL.format(error=str(exc)), ephemeral=True)
+                    return
+
+            if not isinstance(channel, Messageable):
                 await interaction.response.send_message(self.ERROR_CHANNEL_NOT_FOUND, ephemeral=True)
                 return
 
