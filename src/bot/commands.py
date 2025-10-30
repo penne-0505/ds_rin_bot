@@ -127,15 +127,9 @@ async def register_commands(client: "BotClient") -> None:
             async def callback(self, select_interaction: discord.Interaction) -> None:
                 selected_id = int(self.values[0])
                 self.view.selected_category_id = selected_id
-                category = guild.get_channel(selected_id)
-                category_name = category.mention if isinstance(category, discord.CategoryChannel) else f"ID: {selected_id}"
-                await select_interaction.response.edit_message(
-                    content=(
-                        f"設定する一時VCのカテゴリ候補: {category_name}\n"
-                        "内容を確認して『確定』を押してください。"
-                    ),
-                    view=self.view,
-                )
+                for option in self.options:
+                    option.default = option.value == str(selected_id)
+                await select_interaction.response.edit_message(view=self.view)
 
         class ConfirmButton(discord.ui.Button):
             def __init__(self) -> None:
