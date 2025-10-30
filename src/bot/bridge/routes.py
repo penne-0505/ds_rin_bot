@@ -66,7 +66,9 @@ def load_channel_routes(path: Path) -> Sequence[ChannelRoute]:
         except (KeyError, TypeError, ValueError) as exc:
             print(f"Invalid route entry skipped: {entry} ({exc})")
             continue
-
+        
+        print(f"Loaded channel route: {src} -> {dst}")
+        
         routes.append(ChannelRoute(src=src, dst=dst))
 
     return routes
