@@ -52,7 +52,13 @@ async def build_discord_app(config: AppConfig) -> DiscordApplication:
     profile_store = BridgeProfileStore(bridge_profiles_db)
     bridge_messages_db = TinyDB(data_dir / "bridge_messages.json")
     message_store = BridgeMessageStore(bridge_messages_db)
-    routes = load_channel_routes(data_dir / "channel_routes.json")
+    routes = load_channel_routes(
+        data_dir / "channel_routes.json",
+        env_enabled=config.bridge_routes_env.enabled,
+        env_payload=config.bridge_routes_env.routes_json,
+        require_reciprocal=config.bridge_routes_env.require_reciprocal,
+        strict=config.bridge_routes_env.strict,
+    )
 
     client = BotClient(temp_vc_manager=temp_vc_manager)
     client.bridge_manager = ChannelBridgeManager(
