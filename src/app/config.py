@@ -19,13 +19,10 @@ class DiscordSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class BridgeRouteEnvSettings:
-    """チャンネルブリッジの環境変数設定を保持する。"""
+class DatabaseSettings:
+    """データベース接続に必要な設定値を保持するデータクラス。"""
 
-    enabled: bool
-    routes_json: str | None
-    require_reciprocal: bool
-    strict: bool
+    url: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +30,7 @@ class AppConfig:
     """アプリケーション全体の設定を保持するデータクラス。"""
 
     discord: DiscordSettings
-    bridge_routes_env: BridgeRouteEnvSettings
+    database: DatabaseSettings
 
 
 def _load_env_file(env_file: str | Path | None) -> None:
@@ -59,67 +56,33 @@ def _prepare_client_token(raw_token: str | None) -> str:
     return raw_token.strip()
 
 
+def _prepare_database_url(raw_url: str | None) -> str:
+    """データベース接続URLを検証して整形する。"""
+
+    if raw_url is None or raw_url.strip() == "":
+        raise ValueError("DATABASE_URL is not set in environment variables.")
+    return raw_url.strip()
+
+
 def load_config(env_file: str | Path | None = None) -> AppConfig:
     """環境変数と設定ファイルからアプリケーション設定を読み込む。"""
 
     _load_env_file(env_file)
 
     token = _prepare_client_token(raw_token=os.getenv("DISCORD_BOT_TOKEN"))
-    bridge_routes_env = _load_bridge_env_settings()
+    database_url = _prepare_database_url(raw_url=os.getenv("DATABASE_URL"))
 
     LOGGER.info("設定の読み込みが完了しました。")
 
     return AppConfig(
         discord=DiscordSettings(token=token),
-        bridge_routes_env=bridge_routes_env,
+        database=DatabaseSettings(url=database_url),
     )
-
-
-def _load_bridge_env_settings() -> BridgeRouteEnvSettings:
-    enabled = _read_bool_env("BRIDGE_ROUTES_ENABLED", default=False)
-    require_reciprocal = _read_bool_env(
-        "BRIDGE_ROUTES_REQUIRE_RECIPROCAL", default=False
-    )
-    strict = _read_bool_env("BRIDGE_ROUTES_STRICT", default=False)
-    routes_json = os.getenv("BRIDGE_ROUTES")
-
-    if enabled and (routes_json is None or routes_json.strip() == ""):
-        raise ValueError(
-            "BRIDGE_ROUTES_ENABLED=true ですが BRIDGE_ROUTES が未設定です。"
-        )
-
-    if routes_json is not None and routes_json.strip() == "":
-        routes_json = None
-
-    return BridgeRouteEnvSettings(
-        enabled=enabled,
-        routes_json=routes_json,
-        require_reciprocal=require_reciprocal,
-        strict=strict,
-    )
-
-
-def _read_bool_env(name: str, *, default: bool) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    normalized = raw.strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    LOGGER.warning(
-        "環境変数 %s の値 '%s' はブール値として解釈できません。既定値 %s を使用します。",
-        name,
-        raw,
-        default,
-    )
-    return default
 
 
 __all__ = [
     "load_config",
     "AppConfig",
     "DiscordSettings",
-    "BridgeRouteEnvSettings",
+    "DatabaseSettings",
 ]

@@ -1,44 +1,56 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Dict, Iterable, Sequence, Tuple, TYPE_CHECKING, cast
+from dataclasses import dataclass
+from typing import Sequence, TYPE_CHECKING, cast
 
 import discord
 
-from bot.bridge.routes import ChannelEndpoint, ChannelRoute
 from bot.temp_vc import (
     TempVCAlreadyExistsError,
     TempVCCategoryNotConfiguredError,
     TempVCCategoryNotFoundError,
     TempVoiceChannelManager,
 )
-from views import SendModalView
+from views import NicknameSyncSetupView, SendModalView
 
 
 if TYPE_CHECKING:
     from bot.client import BotClient
+    from bot.nickname_sync import ChannelNicknameRuleRepository, NicknameSyncService
 
 
 LOGGER = logging.getLogger(__name__)
 
 
-async def register_commands(client: "BotClient") -> None:
+async def register_commands(
+    client: "BotClient",
+    *,
+    nickname_sync_service: "NicknameSyncService" | None = None,
+    nickname_rule_repository: "ChannelNicknameRuleRepository" | None = None,
+) -> None:
     """クライアントのアプリケーションコマンドを登録する。"""
 
-    registrar = _CommandRegistrar(client)
+    registrar = _CommandRegistrar(
+        client=client,
+        nickname_sync_service=nickname_sync_service,
+        nickname_rule_repository=nickname_rule_repository,
+    )
     registrar.register()
 
 
 @dataclass(slots=True)
 class _CommandRegistrar:
     client: "BotClient"
+    nickname_sync_service: "NicknameSyncService | None" = None
+    nickname_rule_repository: "ChannelNicknameRuleRepository | None" = None
 
     def register(self) -> None:
         self._register_setup()
         self._register_temp_vc_creation()
         self._register_temp_vc_category()
-        self._register_bridge_links()
+        self._register_nickname_sync_setup()
+        # ブリッジ機能は temp/bridge_base へ移行済み
 
     @property
     def tree(self) -> discord.app_commands.CommandTree:
@@ -157,42 +169,117 @@ class _CommandRegistrar:
                 ephemeral=True,
             )
 
-    def _register_bridge_links(self) -> None:
+    def _register_nickname_sync_setup(self) -> None:
         @self.tree.command(
-            name="bridge_links",
-            description="このギルドに設定されているチャンネルブリッジを表示します。",
+            name="nickname_sync_setup",
+            description="指定したチャンネルでニックネームとロールを同期します。",
         )
-        async def bridge_links(interaction: discord.Interaction) -> None:
-            if interaction.guild is None:
+        @discord.app_commands.checks.has_permissions(manage_guild=True)
+        async def nickname_sync_setup(interaction: discord.Interaction) -> None:
+            repository = self.nickname_rule_repository
+            service = self.nickname_sync_service
+            if repository is None or service is None:
+                await _send_ephemeral(
+                    interaction,
+                    "ニックネーム同期機能が初期化されていません。ボットの設定を確認してください。",
+                )
+                return
+
+            guild = interaction.guild
+            if guild is None:
                 await _send_ephemeral(
                     interaction,
                     "このコマンドはサーバー内でのみ使用できます。",
                 )
                 return
 
-            manager = self.client.bridge_manager
-            if manager is None:
+            if not isinstance(interaction.user, discord.Member):
                 await _send_ephemeral(
                     interaction,
-                    "チャンネルブリッジ機能が有効になっていません。",
+                    "ユーザー情報を取得できませんでした。再度お試しください。",
                 )
                 return
 
-            routes = manager.get_routes_from_guild(interaction.guild.id)
-            if not routes:
+            bot_member = guild.me
+            if bot_member is None:
                 await _send_ephemeral(
                     interaction,
-                    "このギルドにはブリッジ連携が設定されていません。",
+                    "Bot メンバー情報の取得に失敗しました。Bot を再起動してください。",
                 )
                 return
 
-            await interaction.response.defer(ephemeral=True)
+            missing_permissions: list[str] = []
+            bot_permissions = bot_member.guild_permissions
+            if not bot_permissions.manage_messages:
+                missing_permissions.append("メッセージの管理")
+            if not bot_permissions.manage_roles:
+                missing_permissions.append("ロールの管理")
+            if missing_permissions:
+                await _send_ephemeral(
+                    interaction,
+                    "Bot に以下の権限を付与してください: " + ", ".join(missing_permissions),
+                )
+                return
 
-            formatter = _BridgeRouteFormatter(client=self.client, guild=interaction.guild)
-            lines = await formatter.describe_routes(routes)
-            message = "🔗 設定されているチャンネルブリッジ\n" + "\n".join(lines)
-            await interaction.followup.send(message, ephemeral=True)
+            channels = self._collect_text_channels(guild=guild, bot_member=bot_member)
+            if not channels:
+                await _send_ephemeral(
+                    interaction,
+                    "設定可能なテキスト/アナウンスチャンネルが見つかりません。",
+                )
+                return
 
+            roles = self._collect_assignable_roles(guild=guild, bot_member=bot_member)
+            if not roles:
+                await _send_ephemeral(
+                    interaction,
+                    "Bot が付与できるロールがありません。Bot のロール順位を確認してください。",
+                )
+                return
+
+            view = NicknameSyncSetupView(
+                guild=guild,
+                requested_by=interaction.user,
+                channels=channels,
+                roles=roles,
+                repository=repository,
+                nickname_sync_service=service,
+            )
+
+            await interaction.response.send_message(
+                "ニックネーム同期の対象チャンネルとロールを選択してください。",
+                view=view,
+                ephemeral=True,
+            )
+
+    @staticmethod
+    def _collect_text_channels(
+        *,
+        guild: discord.Guild,
+        bot_member: discord.Member,
+    ) -> Sequence[discord.TextChannel]:
+        eligible = [
+            channel
+            for channel in guild.text_channels
+            if channel.permissions_for(bot_member).send_messages
+        ]
+        return tuple(eligible[:25])
+
+    @staticmethod
+    def _collect_assignable_roles(
+        *,
+        guild: discord.Guild,
+        bot_member: discord.Member,
+    ) -> Sequence[discord.Role]:
+        eligible = [
+            role
+            for role in guild.roles
+            if not role.is_default()
+            and not role.managed
+            and role < bot_member.top_role
+        ]
+        eligible.sort(key=lambda role: role.position, reverse=True)
+        return tuple(eligible[:25])
 
 class _CategorySelectView(discord.ui.View):
     def __init__(
@@ -277,92 +364,6 @@ class _ConfirmButton(discord.ui.Button):
         view.stop()
 
 
-@dataclass(slots=True)
-class _BridgeRouteFormatter:
-    client: "BotClient"
-    guild: discord.Guild
-    _cache: Dict[Tuple[int, int], Tuple[str, str]] = field(default_factory=dict)
-
-    async def describe_routes(self, routes: Iterable[ChannelRoute]) -> list[str]:
-        lines: list[str] = []
-        for index, route in enumerate(routes, start=1):
-            src_guild_label, src_channel_label = await self._describe_endpoint(route.src)
-            dst_guild_label, dst_channel_label = await self._describe_endpoint(route.dst)
-            lines.append(
-                f"{index}. 実行元: {src_guild_label} / {src_channel_label}\n"
-                f"   連携先: {dst_guild_label} / {dst_channel_label}"
-            )
-        return lines
-
-    async def _describe_endpoint(
-        self, endpoint: ChannelEndpoint
-    ) -> Tuple[str, str]:
-        cache_key = (endpoint.guild, endpoint.channel)
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
-
-        endpoint_guild = await self._resolve_guild(endpoint.guild)
-        if endpoint_guild is not None:
-            guild_label = f"{endpoint_guild.name} (ID: {endpoint_guild.id})"
-            channel_obj: discord.abc.GuildChannel | discord.Thread | None = (
-                endpoint_guild.get_channel(endpoint.channel)
-            )
-        else:
-            guild_label = f"(取得失敗: Guild ID {endpoint.guild})"
-            channel_obj = None
-
-        if channel_obj is None:
-            channel_obj = await self._resolve_channel(endpoint.channel)
-
-        if isinstance(channel_obj, discord.Thread):
-            channel_label = f"{channel_obj.name} (Thread, ID: {channel_obj.id})"
-        elif isinstance(channel_obj, discord.abc.GuildChannel):
-            channel_label = f"{channel_obj.name} (ID: {channel_obj.id})"
-        else:
-            channel_label = f"(取得失敗: Channel ID {endpoint.channel})"
-
-        value = (guild_label, channel_label)
-        self._cache[cache_key] = value
-        return value
-
-    async def _resolve_guild(self, guild_id: int) -> discord.Guild | None:
-        if guild_id == self.guild.id:
-            return self.guild
-
-        guild = self.client.get_guild(guild_id)
-        if guild is not None:
-            return guild
-
-        try:
-            return await self.client.fetch_guild(guild_id)
-        except discord.HTTPException as exc:
-            LOGGER.warning("ギルドの取得に失敗しました: guild=%s, error=%s", guild_id, exc)
-            return None
-
-    async def _resolve_channel(
-        self, channel_id: int
-    ) -> discord.abc.GuildChannel | discord.Thread | None:
-        channel = self.client.get_channel(channel_id)
-        if isinstance(channel, (discord.abc.GuildChannel, discord.Thread)):
-            return channel
-
-        try:
-            fetched = await self.client.fetch_channel(channel_id)
-        except discord.HTTPException as exc:
-            LOGGER.warning(
-                "チャンネルの取得に失敗しました: channel=%s, error=%s",
-                channel_id,
-                exc,
-            )
-            return None
-
-        if isinstance(fetched, (discord.abc.GuildChannel, discord.Thread)):
-            return fetched
-
-        return None
-
-
 async def _send_ephemeral(interaction: discord.Interaction, message: str) -> None:
     """対話からエフェメラルメッセージを送信する補助関数。"""
 
@@ -373,4 +374,3 @@ async def _send_ephemeral(interaction: discord.Interaction, message: str) -> Non
 
 
 __all__ = ["register_commands"]
-
